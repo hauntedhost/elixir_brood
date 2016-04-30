@@ -38,42 +38,7 @@ defmodule Brood do
     {:reply, state.consul_agents, state}
   end
 
-  # get local ip address
-  def get_ip_address do
-    IO.inspect("getting local ip address ...")
-    :os.cmd('ip route get 8.8.8.8 | awk \'{print $NF; exit}\'')
-    |> List.to_string
-    |> String.rstrip(?\n)
-  end
-
-  # get all ip addresses in LAN
-  def get_all_ip_addresses do
-    IO.inspect("getting ip address in LAN ...")
-    {xml, _rest} = :os.cmd('nmap -sn -oX - 192.168.1.0/24')
-    |> :xmerl_scan.string
-    :xmerl_xpath.string('/nmaprun/host/address', xml)
-    |> Enum.map(fn(address) ->
-      xmlElement(address, :attributes)
-      |> Enum.find(fn(attr) ->
-        xmlAttribute(attr, :name) == :addr
-      end)
-      |> xmlAttribute(:value)
-      |> List.to_string
-    end)
-  end
-
   # Private API
-
-  def is_consul_agent?(ip) do
-    case System.cmd("curl", ["#{ip}:8500/v1/agent/self"]) do
-      {_, 0} -> true
-      _      -> false
-    end
-  end
-
-  defp consul_agents(ips) do
-    Enum.filter(ips, &is_consul_agent?/1)
-  end
 
   # lookup brood pid
   defp brood do
@@ -86,7 +51,7 @@ defmodule Brood do
   # spawn brood, register brood as a global
   defp spawn_brood do
     ip_address = get_ip_address
-    ip_addresses = get_all_ip_addresses
+    ip_addresses = get_all_ip_addresses(ip_address)
     start_consul(ip_address)
     consul_agents = consul_agents(ip_addresses)
 
@@ -98,13 +63,54 @@ defmodule Brood do
 
     {:ok, brood} = GenServer.start_link(__MODULE__, state)
     :global.register_name(@name, brood)
+
+    join_consul(state)
+
     brood
   end
 
-  def start_consul(ip_address) do
+  # get local ip address
+  defp get_ip_address do
+    IO.puts("getting local ip address ...")
+
+    ip = :os.cmd('ip route get 8.8.8.8 | awk \'{print $NF; exit}\'')
+    |> List.to_string
+    |> String.rstrip(?\n)
+
+    IO.inspect(ip)
+    ip
+  end
+
+  # get all ip addresses in LAN
+  defp get_all_ip_addresses(ip_address) do
+    IO.puts("getting ip addresses in LAN ...")
+
+    ip_first = ip_address
+    |> String.split(".")
+    |> List.update_at(-1, fn(_) -> "0" end)
+    |> Enum.join(".")
+
+    {xml, _rest} = :os.cmd('nmap -sn -oX - #{ip_first}/24')
+    |> :xmerl_scan.string
+
+    ips = :xmerl_xpath.string('/nmaprun/host/address', xml)
+    |> Enum.map(fn(address) ->
+      xmlElement(address, :attributes)
+      |> Enum.find(fn(attr) ->
+        xmlAttribute(attr, :name) == :addr
+      end)
+      |> xmlAttribute(:value)
+      |> List.to_string
+    end)
+
+    IO.inspect(ips)
+    ips
+  end
+
+  defp start_consul(ip_address) do
     case consul_info(ip_address) do
       {_, 1} ->
-        IO.inspect("starting consul ...")
+        IO.puts("starting consul ...")
         Task.async(fn() ->
           System.cmd("consul", [
             "agent",
@@ -113,15 +119,30 @@ defmodule Brood do
           ])
         end)
       _ ->
-        IO.inspect("consul already started ...")
+        IO.puts("consul already started ...")
         :ok
     end
   end
 
-  def consul_info(ip_address) do
+  defp consul_info(ip_address) do
     System.cmd("consul", [
       "info",
       "--rpc-addr=#{ip_address}:8400"
     ])
+  end
+
+  defp consul_agents(ips) do
+    Enum.filter(ips, &is_consul_agent?/1)
+  end
+
+  defp is_consul_agent?(ip) do
+    case System.cmd("curl", ["#{ip}:8500/v1/agent/self", "-s"]) do
+      {_, 0} -> true
+      _      -> false
+    end
+  end
+
+  defp join_consul(_state) do
+    # TODO: how to know if self consul is joined to another node?
   end
 end
