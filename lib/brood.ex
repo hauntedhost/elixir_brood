@@ -82,29 +82,37 @@ defmodule Brood do
   end
 
   # get all ip addresses in LAN
-  defp get_all_ip_addresses(ip_address) do
+  def get_all_ip_addresses(localhost_ip) do
     IO.puts("getting ip addresses in LAN ...")
 
-    ip_first = ip_address
+    first_ip = localhost_ip
     |> String.split(".")
     |> List.update_at(-1, fn(_) -> "0" end)
     |> Enum.join(".")
 
-    {xml, _rest} = :os.cmd('nmap -sn -oX - #{ip_first}/24')
+    {xml, _rest} = :os.cmd('nmap -sn -oX - #{first_ip}/24')
     |> :xmerl_scan.string
 
-    ips = :xmerl_xpath.string('/nmaprun/host/address', xml)
-    |> Enum.map(fn(address) ->
-      xmlElement(address, :attributes)
-      |> Enum.find(fn(attr) ->
-        xmlAttribute(attr, :name) == :addr
-      end)
-      |> xmlAttribute(:value)
-      |> List.to_string
+    :xmerl_xpath.string('/nmaprun/host', xml)
+    |> Enum.map(fn(host) ->
+      hostname = :xmerl_xpath.string('/host/hostnames/hostname', host)
+      |> extract_first(:name)
+      address = :xmerl_xpath.string('/host/address', host)
+      |> extract_first(:addr)
+      {hostname, address}
     end)
+  end
 
-    IO.inspect(ips)
-    ips
+  defp extract_first([], _), do: nil
+
+  defp extract_first([first_el|_rest], attr_name) do
+    first_el
+    |> xmlElement(:attributes)
+    |> Enum.find(fn(attr) ->
+      xmlAttribute(attr, :name) == attr_name
+    end)
+    |> xmlAttribute(:value)
+    |> List.to_string
   end
 
   defp start_consul(ip_address) do
@@ -144,5 +152,6 @@ defmodule Brood do
 
   defp join_consul(_state) do
     # TODO: how to know if self consul is joined to another node?
+    # consul join -rpc-addr=192.168.1.14:8400 192.168.1.80
   end
 end
