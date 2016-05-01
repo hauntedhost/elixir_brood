@@ -52,19 +52,16 @@ defmodule Brood do
   defp spawn_brood do
     ip_address = get_ip_address
     ip_addresses = get_all_ip_addresses(ip_address)
-    start_consul(ip_address)
-    consul_agents = consul_agents(ip_addresses)
 
     state = %{
       ip_address: ip_address,
-      ip_addresses: ip_addresses,
-      consul_agents: consul_agents
+      ip_addresses: ip_addresses
     }
 
     {:ok, brood} = GenServer.start_link(__MODULE__, state)
     :global.register_name(@name, brood)
 
-    join_consul(state)
+    join_nodes(state)
 
     brood
   end
@@ -115,43 +112,24 @@ defmodule Brood do
     |> List.to_string
   end
 
-  defp start_consul(ip_address) do
-    case consul_info(ip_address) do
-      {_, 1} ->
-        IO.puts("starting consul ...")
-        Task.async(fn() ->
-          System.cmd("consul", [
-            "agent",
-            "-data-dir=/tmp/consul",
-            "-client=#{ip_address}"
-          ])
-        end)
-      _ ->
-        IO.puts("consul already started ...")
-        :ok
-    end
+  defp join_nodes(state) do
+    IO.puts("joining nodes ...")
+
+    state.ip_addresses
+    |> Enum.reject(fn({hostname, ip_address}) ->
+      ip_address == state.ip_address ||
+      is_nil(hostname)
+    end)
+    |> Enum.each(&join_node/1)
   end
 
-  defp consul_info(ip_address) do
-    System.cmd("consul", [
-      "info",
-      "--rpc-addr=#{ip_address}:8400"
-    ])
-  end
-
-  defp consul_agents(ips) do
-    Enum.filter(ips, &is_consul_agent?/1)
-  end
-
-  defp is_consul_agent?(ip) do
-    case System.cmd("curl", ["#{ip}:8500/v1/agent/self", "-s"]) do
-      {_, 0} -> true
-      _      -> false
-    end
-  end
-
-  defp join_consul(_state) do
-    # TODO: how to know if self consul is joined to another node?
-    # consul join -rpc-addr=192.168.1.14:8400 192.168.1.80
+  defp join_node({hostname, ip_address}) do
+    node = "#{hostname}@#{ip_address}" |> String.to_atom
+    Task.async(fn() ->
+      case Node.connect(node) do
+        true -> IO.puts("connected to #{node}")
+        _    -> IO.puts("unable to connect to #{node}")
+      end
+    end)
   end
 end
